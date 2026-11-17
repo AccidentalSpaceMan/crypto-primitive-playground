@@ -1,0 +1,11 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Never commit keys or generated crypto output
+*.key
+*.pem
+*.enc
+*.sig
