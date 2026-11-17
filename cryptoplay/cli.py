@@ -1,10 +1,11 @@
 """Command-line entry point: python -m cryptoplay.cli <command> ..."""
 import argparse
+import getpass
 import sys
 
 from cryptography.exceptions import InvalidTag
 
-from . import hashing, keys, signatures, symmetric
+from . import hashing, kdf, keys, signatures, symmetric
 
 
 def read_bytes(path):
@@ -31,18 +32,43 @@ def cmd_hash(args):
     print(f"{hashing.sha384_file(args.file)}  {args.file}")
 
 
+def ask_password(confirm):
+    """Prompt without echoing, so the password never appears on screen or in
+    shell history (unlike a --password=... command-line argument)."""
+    password = getpass.getpass("Password: ")
+    if not password:
+        raise SystemExit("Error: password cannot be empty.")
+    if confirm and getpass.getpass("Confirm password: ") != password:
+        raise SystemExit("Error: passwords do not match.")
+    return password
+
+
 def cmd_encrypt(args):
-    key = keys.load_aes_key(args.key)
-    write_bytes(args.out, symmetric.encrypt(key, read_bytes(args.file)))
+    plaintext = read_bytes(args.file)
+    if args.password:
+        blob = kdf.encrypt_with_password(ask_password(confirm=True), plaintext)
+    else:
+        blob = symmetric.encrypt(keys.load_aes_key(args.key), plaintext)
+    write_bytes(args.out, blob)
     print(f"Encrypted {args.file} -> {args.out}")
 
 
 def cmd_decrypt(args):
-    key = keys.load_aes_key(args.key)
+    blob = read_bytes(args.file)
+    if args.password and not kdf.is_password_file(blob):
+        print("Error: this file was encrypted with a key file; use --key.", file=sys.stderr)
+        return 1
+    if not args.password and kdf.is_password_file(blob):
+        print("Error: this file was encrypted with a password; use --password.", file=sys.stderr)
+        return 1
     try:
-        plaintext = symmetric.decrypt(key, read_bytes(args.file))
+        if args.password:
+            plaintext = kdf.decrypt_with_password(ask_password(confirm=False), blob)
+        else:
+            plaintext = symmetric.decrypt(keys.load_aes_key(args.key), blob)
     except InvalidTag:
-        print("Decryption FAILED: wrong key, or the file was modified.", file=sys.stderr)
+        what = "password" if args.password else "key"
+        print(f"Decryption FAILED: wrong {what}, or the file was modified.", file=sys.stderr)
         return 1
     write_bytes(args.out, plaintext)
     print(f"Decrypted {args.file} -> {args.out}")
@@ -82,7 +108,10 @@ def build_parser():
     ]:
         s = sub.add_parser(name, help=helptext)
         s.add_argument("file")
-        s.add_argument("--key", required=True)
+        source = s.add_mutually_exclusive_group(required=True)
+        source.add_argument("--key", help="AES-256 key file")
+        source.add_argument("--password", action="store_true",
+                            help="prompt for a password and derive the key with Scrypt")
         s.add_argument("-o", "--out", required=True)
         s.set_defaults(func=func)
 
