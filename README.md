@@ -58,6 +58,14 @@ Password mode (`--password`):
 The salt isn't secret. It is stored in the file so decryption can re-derive the same key. The
 `CPW1` + salt header is authenticated as AES-GCM associated data, so tampering with it is detected.
 
+## Error messages
+
+Common mistakes print a single `Error: ...` line and exit with code 1 instead of a Python
+traceback. These include a missing or misspelled file, a folder passed instead of a file, a public
+key used for signing, a private key used for verifying, and a file that isn't an AES-256 key.
+Pressing Ctrl+C at a password prompt exits with code 130. Unexpected bugs still show a full
+traceback so they can be fixed.
+
 ## Limitations (this is a demo)
 
 - Private keys and AES key files are stored unencrypted on disk. Real code would protect the
@@ -78,3 +86,5 @@ The tests check round-trips, that the same plaintext encrypts differently each t
 flipped bit or wrong key makes decryption fail, and that changed data or a wrong public key makes
 signature verification fail. Password tests also check that a wrong password, a tampered salt or a
 mismatched confirmation is rejected, and that the same password gives a different file every time.
+Error tests (`tests/test_errors.py`) check that each common mistake gives a clear message and no
+traceback.
