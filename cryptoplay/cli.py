@@ -129,9 +129,31 @@ def build_parser():
     return p
 
 
+def error(message, code=1):
+    print(f"Error: {message}", file=sys.stderr)
+    return code
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    return args.func(args) or 0
+    # Turn expected problems (typos, wrong key files, missing folders) into one
+    # clear line instead of a Python traceback. Real bugs still show a traceback.
+    try:
+        return args.func(args) or 0
+    except FileNotFoundError as e:
+        return error(f"file or folder not found: {e.filename}")
+    except IsADirectoryError as e:
+        return error(f"{e.filename} is a folder, not a file.")
+    except PermissionError as e:
+        return error(f"permission denied: {e.filename} "
+                     f"(is it a folder, or open in another program?)")
+    except OSError as e:
+        return error(f"could not access {e.filename}: {e.strerror}")
+    except keys.KeyFileError as e:
+        return error(str(e))
+    except KeyboardInterrupt:
+        print(file=sys.stderr)
+        return error("cancelled.", code=130)
 
 
 if __name__ == "__main__":
