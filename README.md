@@ -1,5 +1,7 @@
 # Crypto Primitive Playground
 
+[![Tests](https://github.com/AccidentalSpaceMan/crypto-primitive-playground/actions/workflows/tests.yml/badge.svg)](https://github.com/AccidentalSpaceMan/crypto-primitive-playground/actions/workflows/tests.yml)
+
 A small Python CLI that demonstrates one cryptographic primitive per module: encrypt a file with
 AES-256-GCM, hash it with SHA-384, sign it with Ed25519, and verify the signature.
 
@@ -88,3 +90,7 @@ signature verification fail. Password tests also check that a wrong password, a 
 mismatched confirmation is rejected, and that the same password gives a different file every time.
 Error tests (`tests/test_errors.py`) check that each common mistake gives a clear message and no
 traceback.
+
+GitHub Actions ([`.github/workflows/tests.yml`](.github/workflows/tests.yml)) runs the full suite
+on every push to `main` and every pull request, on Python 3.10–3.13 (Linux) and Python 3.13
+(Windows). The badge at the top shows the latest result.
