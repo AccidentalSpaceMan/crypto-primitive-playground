@@ -5,7 +5,7 @@ import sys
 
 from cryptography.exceptions import InvalidTag
 
-from . import hashing, hybrid, kdf, keys, signatures, symmetric
+from . import hashing, hybrid, kdf, keys, mac, signatures, symmetric
 
 
 def read_bytes(path):
@@ -35,6 +35,9 @@ def cmd_keygen(args):
     if args.type == "aes":
         keys.generate_aes_key(args.out)
         print(f"Wrote AES-256 key to {args.out}")
+    elif args.type == "mac":
+        keys.generate_mac_key(args.out)
+        print(f"Wrote HMAC-SHA-384 key to {args.out} (share it only with whoever checks your tags)")
     else:
         priv, pub = f"{args.out}.pem", f"{args.out}.pub.pem"
         if args.type == "hybrid":
@@ -50,6 +53,26 @@ def cmd_keygen(args):
 
 def cmd_hash(args):
     print(f"{hashing.sha384_file(args.file)}  {args.file}")
+
+
+def cmd_mac(args):
+    tag = mac.tag_file(keys.load_mac_key(args.key), args.file)
+    print(f"{tag.hex()}  {args.file}")
+
+
+def cmd_mac_verify(args):
+    try:
+        tag = bytes.fromhex(args.tag.strip())
+    except ValueError:
+        return error("--tag must be a hex string, like the output of the mac command.")
+    if len(tag) != mac.TAG_SIZE:
+        return error(f"--tag must be {mac.TAG_SIZE * 2} hex characters "
+                     f"({mac.TAG_SIZE} bytes); got {len(tag) * 2}.")
+    if mac.verify_file(keys.load_mac_key(args.key), args.file, tag):
+        print("MAC VALID (HMAC-SHA-384)")
+        return 0
+    print("MAC INVALID: the file was changed, or the key is wrong.", file=sys.stderr)
+    return 1
 
 
 def ask_password(confirm):
@@ -141,10 +164,11 @@ def build_parser():
     sub = p.add_subparsers(dest="command", required=True)
 
     s = sub.add_parser("keygen", help="generate a key or key pair",
-                       description="Key types: aes (shared AES-256 key); ed25519, mldsa, "
+                       description="Key types: aes (shared AES-256 key); mac (shared "
+                                   "HMAC-SHA-384 key); ed25519, mldsa, "
                                    "hybrid-sign (signing key pairs: classical, post-quantum, "
                                    "or both); hybrid (X25519 + ML-KEM-768 file-sharing key pair)")
-    s.add_argument("--type", choices=["aes", "ed25519", "mldsa", "hybrid-sign", "hybrid"],
+    s.add_argument("--type", choices=["aes", "mac", "ed25519", "mldsa", "hybrid-sign", "hybrid"],
                    required=True)
     s.add_argument("--out", required=True, help="output file (for Ed25519, a name prefix)")
     s.set_defaults(func=cmd_keygen)
@@ -152,6 +176,17 @@ def build_parser():
     s = sub.add_parser("hash", help="SHA-384 digest of a file")
     s.add_argument("file")
     s.set_defaults(func=cmd_hash)
+
+    s = sub.add_parser("mac", help="HMAC-SHA-384 tag of a file (needs a shared key)")
+    s.add_argument("file")
+    s.add_argument("--key", required=True, help="HMAC key file (keygen --type mac)")
+    s.set_defaults(func=cmd_mac)
+
+    s = sub.add_parser("mac-verify", help="check a file's HMAC-SHA-384 tag")
+    s.add_argument("file")
+    s.add_argument("--key", required=True, help="HMAC key file")
+    s.add_argument("--tag", required=True, help="the hex tag printed by the mac command")
+    s.set_defaults(func=cmd_mac_verify)
 
     for name, func, helptext in [
         ("encrypt", cmd_encrypt, "AES-256-GCM encrypt a file"),
