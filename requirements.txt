@@ -1,2 +1,2 @@
-cryptography>=42
+cryptography>=50
 pytest>=8

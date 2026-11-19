@@ -56,7 +56,7 @@ def test_pem_file_used_as_aes_key(workspace, capsys):
     code, err = run(capsys, "encrypt", workspace / "a.txt", "--key", workspace / "me.pem",
                     "-o", workspace / "a.enc")
     assert code == 1
-    assert "PEM signing key" in err
+    assert "PEM key file" in err
 
 
 def test_public_key_used_for_signing(workspace, capsys):
