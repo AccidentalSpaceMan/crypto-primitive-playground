@@ -18,6 +18,19 @@ def write_bytes(path, data):
         f.write(data)
 
 
+SIGNING_NAMES = {
+    "ed25519": "Ed25519",
+    "mldsa": "ML-DSA-65",
+    "hybrid-sign": "hybrid Ed25519 + ML-DSA-65",
+}
+
+
+def signing_name(key):
+    if isinstance(key, tuple):
+        return SIGNING_NAMES["hybrid-sign"]
+    return SIGNING_NAMES["ed25519"] if "Ed25519" in type(key).__name__ else SIGNING_NAMES["mldsa"]
+
+
 def cmd_keygen(args):
     if args.type == "aes":
         keys.generate_aes_key(args.out)
@@ -29,8 +42,10 @@ def cmd_keygen(args):
             print(f"Wrote hybrid X25519 + ML-KEM-768 private key to {priv} (keep secret)")
             print(f"Wrote hybrid public key to {pub} (share this so people can seal files to you)")
         else:
-            keys.generate_ed25519_keypair(priv, pub)
-            print(f"Wrote private key to {priv} and public key to {pub}")
+            keys.generate_signing_keypair(args.type, priv, pub)
+            print(f"Wrote {SIGNING_NAMES[args.type]} private key to {priv} (keep secret)")
+            print(f"Wrote {SIGNING_NAMES[args.type]} public key to {pub} (share this so people "
+                  f"can verify your signatures)")
 
 
 def cmd_hash(args):
@@ -84,14 +99,15 @@ def cmd_decrypt(args):
 
 def cmd_sign(args):
     sk = keys.load_private_key(args.priv)
-    write_bytes(args.out, signatures.sign(sk, read_bytes(args.file)))
-    print(f"Signed {args.file} -> {args.out}")
+    sig = signatures.sign(sk, read_bytes(args.file))
+    write_bytes(args.out, sig)
+    print(f"Signed {args.file} -> {args.out} ({signing_name(sk)}, {len(sig)}-byte signature)")
 
 
 def cmd_verify(args):
     pk = keys.load_public_key(args.pub)
     if signatures.verify(pk, read_bytes(args.file), read_bytes(args.sig)):
-        print("Signature VALID")
+        print(f"Signature VALID ({signing_name(pk)})")
         return 0
     print("Signature INVALID", file=sys.stderr)
     return 1
@@ -124,9 +140,12 @@ def build_parser():
     p = argparse.ArgumentParser(prog="cryptoplay", description="Crypto primitive playground")
     sub = p.add_subparsers(dest="command", required=True)
 
-    s = sub.add_parser("keygen", help="generate an AES key, an Ed25519 signing key pair, "
-                                      "or a hybrid X25519 + ML-KEM-768 file-sharing key pair")
-    s.add_argument("--type", choices=["aes", "ed25519", "hybrid"], required=True)
+    s = sub.add_parser("keygen", help="generate a key or key pair",
+                       description="Key types: aes (shared AES-256 key); ed25519, mldsa, "
+                                   "hybrid-sign (signing key pairs: classical, post-quantum, "
+                                   "or both); hybrid (X25519 + ML-KEM-768 file-sharing key pair)")
+    s.add_argument("--type", choices=["aes", "ed25519", "mldsa", "hybrid-sign", "hybrid"],
+                   required=True)
     s.add_argument("--out", required=True, help="output file (for Ed25519, a name prefix)")
     s.set_defaults(func=cmd_keygen)
 

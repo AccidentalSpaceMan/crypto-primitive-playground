@@ -6,6 +6,7 @@ import re
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.mldsa import MLDSA65PrivateKey, MLDSA65PublicKey
 from cryptography.hazmat.primitives.asymmetric.mlkem import MLKEM768PrivateKey, MLKEM768PublicKey
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -65,11 +66,19 @@ def _read_pem_keys(path, private):
 
 
 def _describe(keys):
-    hybrid_types = (X25519PrivateKey, X25519PublicKey, MLKEM768PrivateKey, MLKEM768PublicKey)
-    if any(isinstance(k, hybrid_types) for k in keys):
+    def has(*types):
+        return any(isinstance(k, types) for k in keys)
+
+    if has(X25519PrivateKey, X25519PublicKey, MLKEM768PrivateKey, MLKEM768PublicKey):
         return "a hybrid file-sharing key"
-    if any(isinstance(k, (Ed25519PrivateKey, Ed25519PublicKey)) for k in keys):
+    ed = has(Ed25519PrivateKey, Ed25519PublicKey)
+    ml = has(MLDSA65PrivateKey, MLDSA65PublicKey)
+    if ed and ml:
+        return "a hybrid signing key"
+    if ed:
         return "an Ed25519 signing key"
+    if ml:
+        return "an ML-DSA signing key"
     return "a different kind of key"
 
 
@@ -92,29 +101,60 @@ def load_aes_key(path):
     return key
 
 
-# ---------------------------------------------------------------- Ed25519 signing keys
+# ---------------------------------------------------------------- signing keys
+#
+# Three kinds, each saved as PEM:
+#   ed25519      one Ed25519 key           (classical)
+#   mldsa        one ML-DSA-65 key         (post-quantum, FIPS 204)
+#   hybrid-sign  Ed25519 + ML-DSA-65 keys  (two PEM blocks in one file)
+
+_SIGNING_TYPES = "ed25519, mldsa or hybrid-sign"
+
+
+def _generate_signing_keys(kind):
+    if kind == "ed25519":
+        return [Ed25519PrivateKey.generate()]
+    if kind == "mldsa":
+        return [MLDSA65PrivateKey.generate()]
+    if kind == "hybrid-sign":
+        return [Ed25519PrivateKey.generate(), MLDSA65PrivateKey.generate()]
+    raise ValueError(f"unknown signing key type: {kind}")
+
+
+def generate_signing_keypair(kind, priv_path, pub_path):
+    """Write a signing key pair of the given kind (see above) as PEM files."""
+    sks = _generate_signing_keys(kind)
+    _write(priv_path, b"".join(_pem_private(sk) for sk in sks))
+    _write(pub_path, b"".join(_pem_public(sk.public_key()) for sk in sks))
+
 
 def generate_ed25519_keypair(priv_path, pub_path):
-    """Write an Ed25519 private key and its public key as PEM files."""
-    sk = Ed25519PrivateKey.generate()
-    _write(priv_path, _pem_private(sk))
-    _write(pub_path, _pem_public(sk.public_key()))
+    generate_signing_keypair("ed25519", priv_path, pub_path)
+
+
+def _pick_signing(path, keys, ed_type, ml_type, action):
+    """Return a single key (Ed25519 or ML-DSA) or an (Ed25519, ML-DSA) tuple."""
+    ed = [k for k in keys if isinstance(k, ed_type)]
+    ml = [k for k in keys if isinstance(k, ml_type)]
+    if len(ed) + len(ml) == len(keys):
+        if len(keys) == 1:
+            return keys[0]
+        if len(ed) == 1 and len(ml) == 1:
+            return ed[0], ml[0]
+    raise KeyFileError(f"{path} is {_describe(keys)}, but {action} needs a signing key "
+                       f"({_SIGNING_TYPES}). Create one with: keygen --type ed25519 --out <name>")
 
 
 def load_private_key(path):
+    """Load a signing private key: Ed25519, ML-DSA-65, or an (Ed25519, ML-DSA-65) pair."""
     keys = _read_pem_keys(path, private=True)
-    if len(keys) != 1 or not isinstance(keys[0], Ed25519PrivateKey):
-        raise KeyFileError(f"{path} is {_describe(keys)}, but signing needs an Ed25519 "
-                           f"private key. Create one with: keygen --type ed25519 --out <name>")
-    return keys[0]
+    return _pick_signing(path, keys, Ed25519PrivateKey, MLDSA65PrivateKey, "signing")
 
 
 def load_public_key(path):
+    """Load a verifying public key: Ed25519, ML-DSA-65, or an (Ed25519, ML-DSA-65) pair."""
     keys = _read_pem_keys(path, private=False)
-    if len(keys) != 1 or not isinstance(keys[0], Ed25519PublicKey):
-        raise KeyFileError(f"{path} is {_describe(keys)}, but verifying needs an Ed25519 "
-                           f"public key.")
-    return keys[0]
+    return _pick_signing(path, keys, Ed25519PublicKey, MLDSA65PublicKey, "verifying")
 
 
 # ---------------------------------------------------------------- hybrid file-sharing keys
