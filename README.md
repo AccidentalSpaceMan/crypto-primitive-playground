@@ -4,7 +4,8 @@
 
 A small Python CLI that demonstrates the major families of cryptographic primitives: hash a file
 with SHA-384, encrypt it with AES-256-GCM, protect it with a password (scrypt), sign it with
-Ed25519, and send it to someone using **hybrid post-quantum key exchange** (X25519 + ML-KEM-768).
+**hybrid post-quantum signatures** (Ed25519 + ML-DSA-65), and send it to someone using **hybrid
+post-quantum key exchange** (X25519 + ML-KEM-768).
 
 Every primitive comes from the [`cryptography`](https://cryptography.io) library or Python's
 `hashlib`. Nothing here implements crypto from scratch.
@@ -32,8 +33,8 @@ python -m cryptoplay.cli decrypt demo.enc --key aes.key -o demo.out.txt
 python -m cryptoplay.cli encrypt demo.txt --password -o demo.enc
 python -m cryptoplay.cli decrypt demo.enc --password -o demo.out.txt
 
-# Sign and verify
-python -m cryptoplay.cli keygen  --type ed25519 --out me      # writes me.pem + me.pub.pem
+# Sign and verify (key type: ed25519, mldsa, or hybrid-sign for both)
+python -m cryptoplay.cli keygen  --type hybrid-sign --out me  # writes me.pem + me.pub.pem
 python -m cryptoplay.cli sign    demo.txt --priv me.pem -o demo.sig
 python -m cryptoplay.cli verify  demo.txt --pub me.pub.pem --sig demo.sig
 
@@ -52,7 +53,7 @@ quantum computer (CRQC).
 |---|---|---|---|---|
 | 1 | **Key exchange** | X25519 **+ ML-KEM-768** (FIPS 203), hybrid | `hybrid.seal` / `unseal` | ✅ Hybrid: safe if *either* holds. X25519 alone falls to Shor's algorithm. |
 | 2 | **Public-key encryption** | KEM-based design: hybrid KEM → HKDF → AES-GCM | `hybrid.seal` / `unseal` | ✅ Post-quantum via ML-KEM |
-| 3 | **Digital signature** | Ed25519 | `signatures.sign` / `verify` | ⚠️ Classical: falls to Shor. ML-DSA (FIPS 204) is the PQC replacement. |
+| 3 | **Digital signature** | Ed25519 **+ ML-DSA-65** (FIPS 204), hybrid; either alone also supported | `signatures.sign` / `verify` | ✅ Hybrid or ML-DSA: post-quantum. Ed25519 alone falls to Shor. |
 | 4 | **Symmetric block cipher** | AES-256 | `symmetric.encrypt` / `decrypt` | ✅ Grover's algorithm cuts it to about 128-bit strength, which is still safe |
 | 5 | **Stream cipher / AEAD** | AES-256-GCM | `symmetric.encrypt` / `decrypt` | ✅ |
 | 6 | **Hash function** | SHA-384 | `hashing.sha384_file` | ✅ |
@@ -79,6 +80,25 @@ means a sealed file stays safe as long as **either** algorithm holds. TLS 1.3 us
 `seal` only needs the recipient's **public** key, so anyone can seal a file to you. That also means
 sealing doesn't prove who sent it. To prove the sender, sign the file as well.
 
+## How hybrid signing works
+
+| Key type | Algorithm | Signature size | Quantum-resistant? |
+|---|---|---|---|
+| `ed25519` | Ed25519 | 64 bytes | No: Shor's algorithm can forge it |
+| `mldsa` | ML-DSA-65 (FIPS 204, lattice-based) | 3,309 bytes | Yes |
+| `hybrid-sign` | Both | 3,377 bytes | Yes, and still safe if ML-DSA turns out to have a flaw |
+
+A hybrid signature is accepted only if **both** the Ed25519 half and the ML-DSA half verify, so a
+forger has to break both algorithms. Signatures matter most for long-lived keys, such as root
+certificates and firmware signing keys, which may still need to be trusted after a quantum
+computer exists.
+
+**Stripping attacks.** An attacker could try to cut one half out of a hybrid signature and present
+it as an ordinary single-algorithm signature, for example keeping only the Ed25519 half and
+forging it later. To prevent this, both halves sign under a hybrid-only label: Ed25519 signs
+`label + message`, and ML-DSA uses the label as its FIPS 204 *context string*. Neither half is a
+valid signature on its own, and the tests check this.
+
 ## File formats
 
 Key-file mode (`encrypt --key`):
@@ -103,8 +123,14 @@ Salts, ephemeral public keys and KEM ciphertexts aren't secret, so they are stor
 password and sealed files the header is authenticated as AES-GCM associated data, so changing any
 byte of the file is detected.
 
-Hybrid key files (`keygen --type hybrid`) hold two standard PEM blocks, one X25519 and one
-ML-KEM-768.
+Hybrid signature (`sign` with a `hybrid-sign` key; Ed25519 and ML-DSA signatures are stored raw):
+
+```
+| "CPS1" (4) | Ed25519 signature (64) | ML-DSA-65 signature (3309) |
+```
+
+Hybrid key files hold two standard PEM blocks: X25519 + ML-KEM-768 for `keygen --type hybrid`,
+and Ed25519 + ML-DSA-65 for `keygen --type hybrid-sign`.
 
 ## Error messages
 
@@ -118,7 +144,8 @@ still show a full traceback so they can be fixed.
 
 - Private keys and AES key files are stored unencrypted on disk. Real code would protect them with
   `BestAvailableEncryption(password)`.
-- Ed25519 signatures are not quantum-resistant. ML-DSA would be the upgrade.
+- Plain `ed25519` signing keys are kept for comparison. They are not quantum-resistant, so use
+  `mldsa` or `hybrid-sign` for anything long-lived.
 - Password mode is only as strong as the password. scrypt slows guessing down but can't save
   `password123`.
 - Files are read fully into memory, so very large files are not supported.
@@ -134,7 +161,10 @@ python -m pytest -q
 The tests check round trips and the failure cases that matter: flipped bits, wrong keys, wrong
 passwords, edited signed files, and mixed-up key types. Hybrid tests (`tests/test_hybrid.py`) also
 check that tampering with **any** part of a sealed file is rejected, and that the key depends on
-**both** halves: a wrong X25519 key **or** a wrong ML-KEM key alone breaks decryption. Error tests
+**both** halves: a wrong X25519 key **or** a wrong ML-KEM key alone breaks decryption. Signature
+tests (`tests/test_mldsa.py`) run every check against all three signing key types, confirm a hybrid
+signature fails if either half is damaged, and check stripping attacks: neither half works as a
+standalone signature, and two ordinary signatures glued together don't pass as a hybrid one. Error tests
 (`tests/test_errors.py`) check that each common mistake gives a clear message and no traceback.
 
 GitHub Actions ([`.github/workflows/tests.yml`](.github/workflows/tests.yml)) runs the full suite
