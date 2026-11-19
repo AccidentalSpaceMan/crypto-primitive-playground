@@ -24,6 +24,11 @@ pip install -r requirements.txt
 # Hash
 python -m cryptoplay.cli hash    demo.txt
 
+# MAC: a keyed fingerprint only key holders can make or check
+python -m cryptoplay.cli keygen  --type mac --out mac.key
+python -m cryptoplay.cli mac     demo.txt --key mac.key       # prints a 96-hex-char tag
+python -m cryptoplay.cli mac-verify demo.txt --key mac.key --tag <tag>
+
 # Encrypt with a shared key file...
 python -m cryptoplay.cli keygen  --type aes --out aes.key
 python -m cryptoplay.cli encrypt demo.txt --key aes.key -o demo.enc
@@ -57,10 +62,23 @@ quantum computer (CRQC).
 | 4 | **Symmetric block cipher** | AES-256 | `symmetric.encrypt` / `decrypt` | ✅ Grover's algorithm cuts it to about 128-bit strength, which is still safe |
 | 5 | **Stream cipher / AEAD** | AES-256-GCM | `symmetric.encrypt` / `decrypt` | ✅ |
 | 6 | **Hash function** | SHA-384 | `hashing.sha384_file` | ✅ |
-| 7 | **MAC** | GMAC tag inside AES-GCM | `symmetric` (via GCM) | ✅ (no standalone HMAC command yet) |
+| 7 | **MAC** | HMAC-SHA-384 with 384-bit keys (also GMAC inside AES-GCM) | `mac.tag_file` / `verify_file` | ✅ |
 | 8 | **Key derivation (KDF)** | HKDF-SHA-384 | `hybrid._derive_key` | ✅ |
 | 9 | **Password hashing** | scrypt (N=2^17, r=8, p=1), salted | `kdf.derive_key` | ✅ Memory-hard, which resists GPUs |
 | 10 | **Random number generation** | OS CSPRNG (`os.urandom`) | all key, nonce and salt generation | ✅ |
+
+## Hash vs. MAC vs. signature
+
+All three detect a changed file. They differ in **who** can create and check them:
+
+| | Needs a key? | Who can create it | Who can check it | Proves who made it? |
+|---|---|---|---|---|
+| **Hash** (SHA-384) | No | Anyone | Anyone | No. An attacker who edits a file can publish a new hash. |
+| **MAC** (HMAC-SHA-384) | Shared secret key | Key holders | Key holders | Only "someone with the key" |
+| **Signature** (Ed25519 / ML-DSA) | Private/public key pair | Private-key holder only | Anyone with the public key | Yes |
+
+`mac-verify` compares tags in **constant time**. A normal `==` stops at the first mismatched
+byte, so an attacker timing many attempts could work out a valid tag one byte at a time.
 
 ## How `seal` works (hybrid post-quantum key exchange)
 
@@ -164,7 +182,10 @@ check that tampering with **any** part of a sealed file is rejected, and that th
 **both** halves: a wrong X25519 key **or** a wrong ML-KEM key alone breaks decryption. Signature
 tests (`tests/test_mldsa.py`) run every check against all three signing key types, confirm a hybrid
 signature fails if either half is damaged, and check stripping attacks: neither half works as a
-standalone signature, and two ordinary signatures glued together don't pass as a hybrid one. Error tests
+standalone signature, and two ordinary signatures glued together don't pass as a hybrid one. MAC
+tests (`tests/test_mac.py`) check a published RFC 4231 test vector, agreement with Python's
+built-in `hmac` on a multi-chunk file, and that an attacker who edits a file can't pass it off with
+a recomputed hash. Error tests
 (`tests/test_errors.py`) check that each common mistake gives a clear message and no traceback.
 
 GitHub Actions ([`.github/workflows/tests.yml`](.github/workflows/tests.yml)) runs the full suite

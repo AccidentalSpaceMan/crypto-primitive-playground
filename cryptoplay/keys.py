@@ -2,6 +2,7 @@
 
 Also loads and saves key files, with clear errors when the wrong kind of key is used.
 """
+import os
 import re
 
 from cryptography.hazmat.primitives import serialization
@@ -97,6 +98,34 @@ def load_aes_key(path):
         raise KeyFileError(
             f"{path} is not an AES-256 key: it is {len(key)} bytes, but an AES-256 key "
             f"must be exactly 32{hint}. Create one with: keygen --type aes --out <file>"
+        )
+    return key
+
+
+# ---------------------------------------------------------------- HMAC keys
+
+MAC_KEY_SIZE = 48  # 384 bits for HMAC-SHA-384
+
+
+def generate_mac_key(path):
+    """Write a random 384-bit HMAC key (48 raw bytes) to a file."""
+    _write(path, os.urandom(MAC_KEY_SIZE))
+
+
+def load_mac_key(path):
+    with open(path, "rb") as f:
+        key = f.read()
+    if len(key) != MAC_KEY_SIZE:
+        if len(key) == 32:
+            hint = (" That looks like an AES key. Use a separate key for each algorithm: "
+                    "reusing one key for encryption and MACs can weaken both.")
+        elif key.startswith(b"-----BEGIN"):
+            hint = " That looks like a PEM key file, not an HMAC key."
+        else:
+            hint = ""
+        raise KeyFileError(
+            f"{path} is not an HMAC key: it is {len(key)} bytes, but an HMAC-SHA-384 key "
+            f"must be exactly {MAC_KEY_SIZE}.{hint} Create one with: keygen --type mac --out <file>"
         )
     return key
 
