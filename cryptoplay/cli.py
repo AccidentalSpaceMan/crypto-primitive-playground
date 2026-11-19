@@ -5,7 +5,7 @@ import sys
 
 from cryptography.exceptions import InvalidTag
 
-from . import hashing, kdf, keys, signatures, symmetric
+from . import hashing, hybrid, kdf, keys, signatures, symmetric
 
 
 def read_bytes(path):
@@ -24,8 +24,13 @@ def cmd_keygen(args):
         print(f"Wrote AES-256 key to {args.out}")
     else:
         priv, pub = f"{args.out}.pem", f"{args.out}.pub.pem"
-        keys.generate_ed25519_keypair(priv, pub)
-        print(f"Wrote private key to {priv} and public key to {pub}")
+        if args.type == "hybrid":
+            keys.generate_hybrid_keypair(priv, pub)
+            print(f"Wrote hybrid X25519 + ML-KEM-768 private key to {priv} (keep secret)")
+            print(f"Wrote hybrid public key to {pub} (share this so people can seal files to you)")
+        else:
+            keys.generate_ed25519_keypair(priv, pub)
+            print(f"Wrote private key to {priv} and public key to {pub}")
 
 
 def cmd_hash(args):
@@ -55,6 +60,9 @@ def cmd_encrypt(args):
 
 def cmd_decrypt(args):
     blob = read_bytes(args.file)
+    if hybrid.is_sealed_file(blob):
+        print("Error: this file was sealed to a public key; use unseal.", file=sys.stderr)
+        return 1
     if args.password and not kdf.is_password_file(blob):
         print("Error: this file was encrypted with a key file; use --key.", file=sys.stderr)
         return 1
@@ -89,12 +97,36 @@ def cmd_verify(args):
     return 1
 
 
+def cmd_seal(args):
+    recipient = keys.load_hybrid_public_key(args.to)
+    write_bytes(args.out, hybrid.seal(recipient, read_bytes(args.file)))
+    print(f"Sealed {args.file} -> {args.out} (only the private key matching {args.to} can open it)")
+
+
+def cmd_unseal(args):
+    blob = read_bytes(args.file)
+    if not hybrid.is_sealed_file(blob):
+        print("Error: this isn't a sealed file. Files made with encrypt are opened "
+              "with decrypt.", file=sys.stderr)
+        return 1
+    private = keys.load_hybrid_private_key(args.priv)
+    try:
+        plaintext = hybrid.unseal(private, blob)
+    except InvalidTag:
+        print("Unseal FAILED: the file was sealed to a different key, or it was modified.",
+              file=sys.stderr)
+        return 1
+    write_bytes(args.out, plaintext)
+    print(f"Unsealed {args.file} -> {args.out}")
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="cryptoplay", description="Crypto primitive playground")
     sub = p.add_subparsers(dest="command", required=True)
 
-    s = sub.add_parser("keygen", help="generate an AES key or an Ed25519 key pair")
-    s.add_argument("--type", choices=["aes", "ed25519"], required=True)
+    s = sub.add_parser("keygen", help="generate an AES key, an Ed25519 signing key pair, "
+                                      "or a hybrid X25519 + ML-KEM-768 file-sharing key pair")
+    s.add_argument("--type", choices=["aes", "ed25519", "hybrid"], required=True)
     s.add_argument("--out", required=True, help="output file (for Ed25519, a name prefix)")
     s.set_defaults(func=cmd_keygen)
 
@@ -126,6 +158,19 @@ def build_parser():
     s.add_argument("--pub", required=True)
     s.add_argument("--sig", required=True)
     s.set_defaults(func=cmd_verify)
+
+    s = sub.add_parser("seal", help="encrypt a file to someone's hybrid public key "
+                                    "(X25519 + ML-KEM-768)")
+    s.add_argument("file")
+    s.add_argument("--to", required=True, help="recipient's hybrid public key (.pub.pem)")
+    s.add_argument("-o", "--out", required=True)
+    s.set_defaults(func=cmd_seal)
+
+    s = sub.add_parser("unseal", help="decrypt a sealed file with your hybrid private key")
+    s.add_argument("file")
+    s.add_argument("--priv", required=True, help="your hybrid private key (.pem)")
+    s.add_argument("-o", "--out", required=True)
+    s.set_defaults(func=cmd_unseal)
     return p
 
 
